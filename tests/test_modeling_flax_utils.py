@@ -19,8 +19,9 @@ import numpy as np
 from huggingface_hub import HfFolder, delete_repo
 from requests.exceptions import HTTPError
 
-from transformers import BertConfig, is_flax_available
-from transformers.testing_utils import TOKEN, USER, is_staging_test, require_flax
+from transformers import BertConfig, BertModel, is_flax_available
+from transformers.testing_utils import TOKEN, USER, is_staging_test, require_flax, require_safetensors, require_torch
+from transformers.utils import FLAX_WEIGHTS_NAME, SAFE_WEIGHTS_NAME
 
 
 if is_flax_available():
@@ -184,3 +185,53 @@ class FlaxModelUtilsTest(unittest.TestCase):
         model = FlaxBertModel.from_pretrained(model_id, subfolder=subfolder)
 
         self.assertIsNotNone(model)
+
+    @require_safetensors
+    def test_safetensors_save_and_load(self):
+        model = FlaxBertModel.from_pretrained("hf-internal-testing/tiny-random-bert", from_pt=True)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.save_pretrained(tmp_dir)
+
+            # No msgpack file, only a model.safetensors
+            self.assertTrue(os.path.isfile(os.path.join(tmp_dir, SAFE_WEIGHTS_NAME)))
+            self.assertFalse(os.path.isfile(os.path.join(tmp_dir, FLAX_WEIGHTS_NAME)))
+
+            new_model = FlaxBertModel.from_pretrained(tmp_dir)
+
+        self.assertTrue(check_models_equal(model, new_model))
+
+    @require_flax
+    @require_torch
+    def test_safetensors_save_and_load_pt_to_tf(self):
+        model = FlaxBertModel.from_pretrained("hf-internal-testing/tiny-random-bert", from_pt=True)
+        pt_model = BertModel.from_pretrained("hf-internal-testing/tiny-random-bert")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pt_model.save_pretrained(tmp_dir)
+
+            # Check we have a model.safetensors file
+            self.assertTrue(os.path.isfile(os.path.join(tmp_dir, SAFE_WEIGHTS_NAME)))
+
+            new_model = FlaxBertModel.from_pretrained(tmp_dir)
+
+        # Check models are equal
+        self.assertTrue(check_models_equal(model, new_model))
+
+    @require_safetensors
+    def test_safetensors_load_from_hub(self):
+        # TODO
+
+        flax_model = FlaxBertModel.from_pretrained("hf-internal-testing/tiny-random-bert")
+
+        # Can load from the TF-formatted checkpoint
+        safetensors_model = FlaxBertModel.from_pretrained("hf-internal-testing/tiny-random-bert-safetensors-tf")
+
+        # Check models are equal
+        for p1, p2 in zip(safetensors_model.weights, flax_model.weights):
+            self.assertTrue(np.allclose(p1.numpy(), p2.numpy()))
+
+        # Can load from the PyTorch-formatted checkpoint
+        safetensors_model = FlaxBertModel.from_pretrained("hf-internal-testing/tiny-random-bert-safetensors")
+
+        # Check models are equal
+        for p1, p2 in zip(safetensors_model.weights, flax_model.weights):
+            self.assertTrue(np.allclose(p1.numpy(), p2.numpy()))
